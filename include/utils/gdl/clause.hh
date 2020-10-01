@@ -22,14 +22,12 @@ namespace ares
         
     private:
         cnst_lit_sptr head = nullptr;
-        ClauseBody* _body = nullptr;
-        int i=0;
-        ClauseBody& body;
+        ClauseBody* body = nullptr;
         Substitution* theta = nullptr;
-        ClauseBody& getBody(){return body;}
 
     public:
-        // clause_body_mem_pool
+        ClauseBody& getBody(){return *body;}
+        // clausebody_mem_pool
         /**
          * Protect against accidental copy assignment, pass by value,...
          */
@@ -45,10 +43,15 @@ namespace ares
          * where A0...An are literals(the body), and A is the head
          */
         Clause(cnst_lit_sptr head,ClauseBody* _b)
-        :head(head),_body(_b),body(std::ref(*_body)),theta(nullptr)
+        :head(head),body(_b),theta(nullptr)
         {
-            i=0;
         };
+
+        Clause(cnst_lit_sptr head,ClauseBody* _b,Substitution* t)
+        :head(head),body(_b),theta(t)
+        {
+        };
+
 
         /**
          * Override operator new and delete, for custom memory mgmt.
@@ -57,88 +60,80 @@ namespace ares
         void  operator delete(void*);
         ~Clause(){
             if (theta) delete theta;
-            if( _body ) delete _body;
+            if( body ) delete body;
             head = nullptr;
             theta = nullptr;
-            _body = nullptr;
+            body = nullptr;
         }
 
 
-        static bool EMPTY_CLAUSE(const Clause& c) { return (c.body.size() == 0  and (not c.head) ); }
+        static bool EMPTY_CLAUSE(const Clause& c) { return (c.body->size() == 0  and (not c.head) ); }
 
-        Clause* clone() const{
-            return new Clause(head, new ClauseBody(body.begin(), body.end()));
+        inline Clause* clone() const{
+            auto* c = new Clause(head, new ClauseBody(body->begin(), body->end()));
+            return c;
+        }
+        inline Clause* next() const{
+            ushort n = body->size() == 0 ? 0 : 1;
+            auto* c = new Clause(head, new ClauseBody(body->begin()+n, body->end()));
+            if( theta )
+                c->setSubstitution(*theta + Substitution());
+            return c;
         }
         /**
          * @brief Create a new renamed clause, used in a resolution step while resolving
          * a goal.
-         * @param renamedBody.size() >= body.size()
+         * @param renamedBody.size() >= body->size()
          */ 
         void renameBody(ClauseBody& renamedBody, SuffixRenamer& vr) const {
             
-            // renamed->body.resize()
+            // renamed->body->resize()
             auto vset = VarSet();
-            for (uint i =0;i < body.size() ; i++){
-                auto& l = body[i];
+            for (uint i =0;i < body->size() ; i++){
+                auto& l = (*body)[i];
                 const cnst_term_sptr& lr = (*l)(vr, vset);       //Apply renaming
                 renamedBody[i] = *((cnst_lit_sptr*)&lr);
             }
             return;
         }
-        /**
-         * @brief insert the elements from 
-         * @param c.body[ @param offset ] to c.body.end() to 
-         * this->body[ @param pos ] to this->body.end()
-         * this->body should have space for c.body.size() - offset elements
-         */
-        void insert(std::size_t pos, const Clause& c, std::size_t offset = 1){
-            //Experiment with both inserting at the back and the front
-            for (size_t i = offset; i < c.body.size(); i++)
-            {
-                auto j = pos + i - offset;
-                this->body[j] = c.body[i];
-            }
-            // this->body.insert(body.begin()+pos, c.body.begin()+1, c.body.end());
-        }
-        std::size_t size()const { return body.size(); }
+
+        std::size_t size()const { return body->size(); }
 
         void setHead(cnst_lit_sptr h){head = h;}
+        
         const cnst_lit_sptr& getHead() const { 
             if ( head )return head; 
             return Term::null_literal_sptr;
         }
-        // void setBody(ClauseBody* b){ if(!_body) _body = b;}
 
         Substitution& getSubstitution() const { return *theta;}
+
         void setSubstitution(Substitution* t){ theta = t;}
 
-        const cnst_lit_sptr& front() const { return body[0];}
+        cnst_lit_sptr& front() const { return (*body)[0];}
 
-        void pop_front() { body.pop_front();}
+        void pop_front() { body->pop_front();}
 
         void delayFront(){
-            body.front_to_back();
+            body->front_to_back();
         }
-        
-        /**
-         * TODO: Implement hashing so that only order of variables matter not their name.
-         */
-        std::size_t hash()const{ return 0;}
-
+      
         std::string to_string()const{
             std::string s("");
-            if( body.size() > 0) s.append("(");
+            if( body->size() > 0) s.append("(");
             if( head ) s.append( head->to_string() + " ");
-            if( body.size() > 0) s.append(" <= ");
+            if( body->size() > 0) s.append(" <= ");
 
-            for (auto &l : body)
+            for (auto &l : *body)
                 s.append("\n" + l->to_string());
 
-            if( body.size() > 0) s.append(")");
-        if( theta and (not theta->isEmpty()) ) 
-            s.append("\nSubstitution :\n" + theta->to_string());
-        return s;
+            if( body->size() > 0) s.append(")");
+            if( theta and (not theta->isEmpty()) ) 
+                s.append("\nSubstitution :\n" + theta->to_string());
+            return s;
         }
+
+
         friend std::ostream & operator << (std::ostream &out, const Clause &c){
             out << c.to_string();
             return out;

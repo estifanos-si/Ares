@@ -1,37 +1,42 @@
-#ifndef COMMON_HH
-#define COMMON_HH
+#ifndef TEST_RUNNER_HH
+#define TEST_RUNNER_HH
+
 #include <string>
 #include <iostream>
 #include <chrono>
-
-const std::string green("\033[48;20;32m");
-const std::string red("\033[49;18;31m");
-
-const std::string green_bg("\033[98;84;42m");
-const std::string red_bg("\033[38;71;41m");
-const std::string reset("\033[0m");
+#include <random>
+#include <vector>
+#include <unordered_map>
+#include <functional>
+#include "utils/utils/color.hh"
 
 void print(bool first){
-    std::cout << reset << "\n";
+    std::cout << rang::style::reset << "\n";
     fflush(NULL);
 }
 
 template<class T, class... Types>
 void print(bool first,T s1, Types... args){
-    if( first ) std::cout << green;
-    std::cout << s1 << " ";
+    using namespace rang;
+    using namespace std;
+    if( first ) cout << style::bold << fg::green;
+    cout << s1 << " ";
     print(false, args...);
 }
 
 void print_fail(bool first){
-    std::cout << reset << std::endl;
+    using namespace rang;
+    using namespace std;
+    cout << style::reset << endl;
     fflush(NULL);
 }
 
 template<class T, class... Types>
 void print_fail(bool first,T s1, Types... args){
-    if( first ) std::cout << red;
-    std::cout << s1<< " ";
+    using namespace rang;
+    using namespace std;
+    if( first ) cout <<style::bold <<  fg::red;
+    cout << s1<< " ";
     print_fail(false, args...);
 }
 
@@ -41,7 +46,6 @@ struct Assert
     Assert() {count = 0;}
     template< class... Types>
     void  operator()(bool cond, Types... msg) const {
-        assert(0 == 0);
         if(!cond ) {print_fail(true,"Assertion Failed : ", msg...);abort();}
         else 
             count++;
@@ -49,7 +53,7 @@ struct Assert
     mutable uint count ;
 };
 
-typedef void (*Test)();
+typedef std::function<void(void)> Test;
 
 struct TestCase
 {
@@ -124,6 +128,5 @@ Assert Runner::_assert_true;
 
 #define add_test(runner, test)  runner.add(test,#test)
 #define assert_true(cond) Runner::_assert_true(cond, #cond);
-
-// #define assert_true.count _assert_true.count
+#define assert_false(cond) Runner::_assert_true(!(cond), #cond);
 #endif

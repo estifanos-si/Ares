@@ -8,18 +8,23 @@ namespace ares
 {
     class State;
     
-    class Match
+    struct Match
     {
-    private:
+        Match():takenAction(nullptr) {}
+        ~Match() {}
+        void reset(){
+            game = nullptr;
+            matchId = "";
+            role.reset();
+            strtClck=0;
+            plyClck=0;
+        }
         Game* game;
-        State* state;
+        std::string matchId;
         uint strtClck;
         uint plyClck;
-        std::string role;
-
-    public:
-        Match(/* args */) {}
-        ~Match() {}
+        Action* takenAction;
+        cnst_term_sptr role;
     };
     /**
      * Represents the match's state.
@@ -43,12 +48,12 @@ namespace ares
             
             return v;
         }
-        virtual void add(ushort name, Clause* c){
+        virtual bool add(ushort name, Clause* c){
             std::lock_guard<SpinLock> lk(slock);
             if( state.find(name) == state.end() )
                 state[name] = new UniqueClauseVec();
             
-            state[name]->push_back(c);
+            return state[name]->push_back(c);
         }
         std::unordered_map<ushort, UniqueClauseVec*>::const_iterator begin()const
         { return state.cbegin();}
@@ -59,13 +64,54 @@ namespace ares
             state.insert(s.state.begin(), s.state.end());
             return *this;
         }
-        virtual ~State(){
-            for (auto &&i : state)
+        void reset() { state.clear();}
+        State* clone()const{
+            auto sClone = new State();
+            for (auto &&[name,vec] : state)
             {
-                for (auto &&c : *i.second)
+                auto& stateC =sClone->state[name];
+                stateC = new UniqueClauseVec(vec->size());
+                for (size_t i = 0; i < vec->size(); i++)
+                    stateC->push_back((*vec)[i]->clone());
+            }
+            
+            return sClone; 
+        }
+        std::string toString()const{
+            std::string s;
+            for (auto &&[name,vec] : state)
+            {
+                s.append( "----" + std::to_string(name) + "-----\n");
+                for (auto &&i : *vec)
+                    s.append( i->to_string() + "\n") ;
+            }   
+            return s;
+        }
+        std::string toStringHtml()const{
+            std::string s;
+            for (auto &&[name,vec] : state)
+            {
+                for (auto &&i : *vec)
+                    s.append( i->to_string() + "<br/>") ;
+            }   
+            return s;
+        }
+        bool operator ==(const State& other){
+            if( state.size() != other.state.size() ) return false;
+            for (auto &&[name,vec] : state)
+            {
+                auto it =  other.state.find(name);
+                if( it == other.state.end() or ( (*vec) != (*it->second) ) ) return false;
+            }
+            return true;
+        }
+        virtual ~State(){
+            for (auto &&[name, vector] : state)
+            {
+                for (auto &&c : *vector)
                     delete c;
                 
-                delete i.second;
+                delete vector;
             }
             
         }

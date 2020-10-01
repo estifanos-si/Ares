@@ -1,84 +1,198 @@
 #include "reasoner/prover.hh"
 #include "ares.hh"
 namespace ares
-{
-    Prover* Prover::_prover = nullptr;
-    SpinLock Prover::slock;
-    bool Prover::proveDistinct(Clause& goal){
-        //goal.front() should be Ground
-        VarSet vset;
-        cnst_term_sptr l = (*goal.front())(goal.getSubstitution(),vset);
-        if ( not l ) return false;      //This happens when a variable is substituted by a term containing it, circular dependency while instantiating.
-        if( not l->is_ground() ){
-            if( goal.size() == 1 ) 
-                throw DistinctNotGround("Distinct called with : (distinct " + l->to_string());
-            goal.delayFront();
-            return true;
-        }
-        //Check s != t
-        const Literal* lptr = (Literal*)l.get();
-        // const Term& s = *l->getArg(0);
-        // const Term& t = *l->getArg(1);
-        if( (*lptr->getArg(0)) == (*lptr->getArg(1)) ){
-            return false;
-        }
-        goal.pop_front();
-        return true;
-    }
-    bool Prover::handleNegation(Clause& goal,const  State* context, SuffixRenamer& renamer){
-        VarSet vset;
-        cnst_term_sptr l = (*goal.front())(goal.getSubstitution(),vset);
-        if ( not l ) return false;      //This happens when a variable is substituted by a term containing it, circular dependency while instantiating.
-        if( not l->is_ground() ){
-            if( goal.size() == 1 ) 
-                throw NegationNotGround("Negative literal: called with : " + l->to_string());
-            goal.delayFront();
-            return true;
-        }
-        //Try to prove <-(not l)  l is negative
-        cnst_lit_sptr* _lp = (cnst_lit_sptr*)&l;
-        PoolKey key{l->get_name(), new Body(_lp->get()->getBody().begin(),_lp->get()->getBody().end()), true,nullptr};
-        cnst_lit_sptr lp = Ares::exprpool->getLiteral(key);
-        bool success = false;
-        bool done = false;              //Shared among threads set to true when an answer is found
-        auto cb = [&success](const Substitution&){
-            success = true;         //Just to know if one answer is derived. try to prove if P |= lp,(i.e,  <-lp )
-        };
-        Clause* newGoal = new Clause(nullptr, new ClauseBody{lp});
-        newGoal->setSubstitution(new Substitution);
-        // Query(Clause* _g,const  State* _c , const CallBack<T>& _cb, const bool _one,bool& d)
-        Query<decltype(cb)> nQuery(newGoal, context, std::ref(cb), true, std::ref(done));
-        nQuery.renamer.setSuffix( renamer.getNxtSuffix());
-        nQuery.pool = nullptr;
-        _prove<decltype(cb)>(nQuery);     //Good old fashioned recursion
+{ 
+    std::atomic<int> Query::nextId = 0;
+    AnsIterator Cache::NOT_CACHED(nullptr,-1,nullptr);
 
-        if( success )   //Just proved <- lp meaning we have refuted (<-l) meaning P |= lp. <-l has failed finitely
-            return false;
-        goal.pop_front();
-        return true;            // lp not logical consequence of P, so assume P |=( not lp ) ( equivalently P |= l )
-    }
-    Resolvent Prover::resolve(const Clause& goal, const Clause& c, SuffixRenamer& vr){
-        auto vset = VarSet();
-        //Make variables in head unique
-        cnst_term_sptr _r = (*c.getHead())(vr,vset);
-        cnst_lit_sptr* renamedHead = (cnst_lit_sptr*)&_r;
-        Substitution* mgu = new Substitution(goal.getSubstitution());
-        bool ok = Unifier::unifyPredicate(*goal.front(), **renamedHead, *mgu);
-        Resolvent gn;
-        gn.ok = ok;
-        // Ares::mempool->remove(*renamedHead);
-        if( not ok ){
-            delete mgu;
-            return gn;
+    void Prover::compute(Query& query){
+        {
+            std::lock_guard<std::mutex> lk(lock);
+            if( done )return;
+            done = false;
+            proverCount++;
         }
-        ClauseBody* renamedBody = new ClauseBody(c.size() + goal.size() -1 );
+        Cache* cache = query.cache;
+        auto* proverPool = query.pool;
+        //First stage
+        proverPool->post( [&](){compute(query,false);} );
+        proverPool->wait();
+
+        //For Starting the subsequent stages
+        auto nextstage = [=](Query& q){ proverPool->post( [=](){ compute(q,false); } ); };
+        //Check if there are any suspended queries and new answers
+        while (cache and cache->hasChanged() and (not query.cb->done))
+        {
+            //New answers have been obtained, resume suspended queries
+            cache->next(nextstage);
+            proverPool->wait();
+        }
+
+        {
+            std::lock_guard<std::mutex> lk(lock);
+            proverCount--;
+        }
+        cv.notify_one();
+    }
+
+    void Prover::compute(Query query, const bool isLookup){
+        if( query.cb->done or done ) 
+            return; //Done stop searching
+        
+        //Found an answer
+        if( Clause::EMPTY_CLAUSE(*query) ){
+            (*query.cb)(query->getSubstitution(),query.suffix, isLookup);
+            return;
+        }
+        
+        //Instantiate front
+        VarSet vset;
+        const cnst_term_sptr& t = (*query->front())(query->getSubstitution(),vset);
+        cnst_lit_sptr lit = *(cnst_lit_sptr*)&t;
+        query->front() = lit;
+
+        //Check if distinct
+        if( lit->get_name() == Namer::DISTINCT ){
+            computeDistinct(query);
+            return;
+        }
+        
+        //Check if negation
+        if( !(*lit) ){
+            computeNegation(query);
+            return;
+        }
+        auto* cache = query.cache;
+        //Register query as solution or lookup query
+        bool shldCache = !contextual(query.context, lit) and cache and !isLookup; 
+        //don't want to cache true and does, during negations, and lookups
+        auto it = shldCache ? (*cache)[query] : Cache::NOT_CACHED ;    
+
+        if( it.null() ){
+            //Solution Node, do an sld-resolution step
+            query->pop_front();
+            ClauseCB* cb = new ClauseCB(std::move(query));
+            compute(lit, query, cb,isLookup);
+        }
+        else
+            //Lookup node, check if there are answers already computed
+            lookup(it, query, lit);
+    }
+
+    void Prover::lookup(AnsIterator& it, Query& query,cnst_lit_sptr& lit){
+        if( query.cb->done or done ) 
+            return; //Done stop searching
+        /**
+         * TODO: CHECK WETHER NOT RENAMING CREATES A PROBLEM
+         */
+        auto* proverPool = query.pool;
+        auto& nxt = it.nxt;
+        while (it)
+        {
+            auto& soln = *it;
+            //do an sld-resolution of lit with each solution
+            Substitution mgu;
+            //FOR DEBUGGING
+            assert( soln->is_ground() );
+            if( Unifier::unifyPredicate(*lit, *soln,mgu) ) {
+                auto resolvent = std::unique_ptr<Clause>(nxt->clone());
+                resolvent->setSubstitution( nxt->getSubstitution() + mgu);
+                Query nxtQ(resolvent, query.cb,query.context,query.cache,query.suffix,query.random);
+                nxtQ.pool = query.pool;
+                if( query.pool ) //We are not trying to prove a negation
+                    proverPool->post([=] { compute(nxtQ,true);});
+                else    //We are in the middle of proving a negation
+                    compute(nxtQ,true);
+            }
+            ++it;
+        }
+    }
+    
+    void Prover::compute(cnst_lit_sptr lit,Query q, CallBack* cb,const bool lookup){
+        if( cb->done or done ) 
+            return; //Done stop searching
+        auto* proverPool = q.pool;
+        bool isContxt = contextual(q.context, lit);
+        //If its contextual or lit has was head of the resolvent b/n a lookup node and a solution we dont cache
+        auto cblit = new LiteralCB(lit, std::unique_ptr<CallBack>(cb), ( (isContxt or lookup) ? nullptr : q.cache) );
+        std::shared_ptr<CallBack> cbsptr(cblit);
+        //Resolve against all program clauses whose heads unify with lit.
+        //Need to know weather lit is contextual or not, so as to determine the correct knowldge base to check
+        const KnowledgeBase& kb_t = isContxt ? *q.context : *this->kb;
+        SuffixRenamer renamer(q.suffix);
+        //Resolve against each candidate
+        const auto& cs = kb_t[lit->get_name()]->getElements();
+        UIterator<const ares::Clause *>* it = q.random ? new RandIterator(cs) : new UIterator(cs);
+        while (*it)
+        {
+            std::unique_ptr<Clause> gn( resolve( lit, ***it, renamer));
+            if( gn ) 
+            {
+                Query qn(gn, cbsptr, q.context,q.cache,renamer.gets(),q.random);
+                qn.pool = q.pool;
+                if( q.pool ) //We are not trying to prove a negation
+                    proverPool->post([=]{ compute(qn, false);});
+                else //We are in the middle of proving a negation
+                    compute(qn, false);
+            }
+            ++(*it);
+        }
+        delete it;
+    }
+
+    Clause* Prover::resolve(const cnst_lit_sptr& lit, const Clause& c,SuffixRenamer& vr){
+        auto* mgu = new Substitution();
+        VarSet vset;
+        auto r = (*c.getHead())(vr, vset);
+        auto renamed = *(cnst_lit_sptr*)&r;
+        if ( !Unifier::unifyPredicate(*lit, *renamed,*mgu) ){
+            delete mgu;
+            return nullptr;
+        }
+        ClauseBody* renamedBody = new ClauseBody(c.size());
         c.renameBody(*renamedBody,vr);
-        //Create The resolvent by (goal -{front()} Union c - {c.head} ) 
-        Clause* renamed = new Clause(nullptr, renamedBody);
-        renamed->insert(c.size(), goal,1);      
-        //save the mgu
-        renamed->setSubstitution(mgu);
-        gn.gn = renamed;
-        return gn;
+        return new Clause( nullptr, renamedBody,mgu);
+    }
+    void Prover::computeNegation(Query& query){
+        //front has the form (not A1)
+        cnst_lit_sptr& front = query->front();
+        if( not front->is_ground() ){
+            query->delayFront();
+            compute(query, false);
+            return;
+        }
+        
+        //Get A1 from memCache
+        PoolKey key{front->get_name(), new Body(front->getBody().begin(), front->getBody().end()), true};
+        cnst_lit_sptr pstvLit = Ares::memCache->getLiteral(key);
+
+        //Prove <-A1
+        //Callback which stops all computations when one answer is computed
+        std::atomic_bool done = false;
+        std::unique_ptr<Clause> g(nullptr);
+        Query q(g,query.cb,query.context,nullptr,0,query.random);//pstvLit is ground so we could restart the suffix
+        q.pool  = nullptr;
+        compute(pstvLit, q, new ClauseCBOne(done,nullptr));
+        if( done ) //Atleast one answer has been found, so <-A1 succedeed 
+            return;
+
+        //Failed to prove <-A1, therefore P |= <-(not)A1
+        query->pop_front();
+        //Continue proving <-A2,..,An
+        compute(query, false);
+    }
+    void Prover::computeDistinct(Query& query){
+        cnst_lit_sptr& front = query->front();
+        if( not front->is_ground() ){
+            query->delayFront();
+            compute(query, false);
+            return;
+        }
+
+        if( *front->getArg(0) == (*front->getArg(1)) )
+            return;
+        
+        query->pop_front();
+        compute(query, false);
     }
 } // namespace ares

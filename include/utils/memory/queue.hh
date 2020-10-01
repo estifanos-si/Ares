@@ -5,6 +5,8 @@
 #include <thread>
 #include <functional>
 #include <array>
+#include <tbb/tbb.h>
+
 #define BUCKET_SIZE 64
 
 namespace ares
@@ -16,7 +18,8 @@ namespace ares
         // enum types {queue, lock};
         typedef std::function<void(T)> op_t;
         DeletionQueue(){
-            queues[0] = queues[1] = UniqueVector<T>(cfg.deletionQueueSize);
+            queues[0].reserve(cfg.deletionQueueSize);
+            queues[1].reserve(cfg.deletionQueueSize);
             i=0;
         }
 
@@ -35,13 +38,20 @@ namespace ares
             for (auto &&st : queues[j])
                 op(st);
             
+            // const auto& r = tbb::blocked_range(queues[j].begin(), queues[j].end());
+            // tbb::parallel_for(r, [&](auto& pr){
+            //     for (auto &&st : pr)
+            //         op(st);   
+            // });
             queues[j].clear();
         }
-        inline bool exists(const T el){
-            return queues[i].exists(el);
+
+        inline bool empty(){
+            std::lock_guard<SpinLock> lk(lock);
+            return queues[i].size() == 0;
         }
         // private:
-            UniqueVector<T> queues[2];
+            std::vector<T> queues[2];
             SpinLock lock;
             byte i;
     };
@@ -79,16 +89,16 @@ namespace ares
                 {
                     {
                         std::lock_guard<std::mutex> lk(mOutstdWork);
-                        if( noJob() ){
-                            if( executed == 0) 
-                                return 0;
-    
-                            outstanding_work -=executed;
+                        if( executed ){
                             end->next = _front;
-                            end = _back;
+                            end = _back;   
+                        }
+                        if( noJob() ){
+                            outstanding_work -=executed;
                             return executed;
                         }
-                        grow(_front,  _back, _index);
+
+                        detach(_front,  _back, _index);
                     }
                     //traverse buckets starting from front
                     Node* n = _front;
@@ -116,6 +126,9 @@ namespace ares
                 while((n = n->next)) i++;
                 return i;
             }
+            ~JobQueue(){
+                delete front;
+            }
             std::mutex mOutstdWork;
         private:
             /**
@@ -135,7 +148,7 @@ namespace ares
              * shift back one node growing as needed but save front, back, and index in 
              * @param _front, @param _back, and @param _index;
              */
-            inline void grow(Node*& _front, Node*&_back, byte& _index){
+            inline void detach(Node*& _front, Node*&_back, byte& _index){
                 _front = front;
                 _back  = back;
                 _index = index;
@@ -157,6 +170,9 @@ namespace ares
                 Node(){next = nullptr;}
                 std::array<Job_t,BUCKET_SIZE> bucket;
                 Node* next;
+                ~Node(){
+                    if ( next ) delete next;
+                }
             };
     };
 } // namespace ares

@@ -8,11 +8,12 @@
 #include <iostream>
 #include <mutex>
 #include "utils/threading/locks.hh"
+
 namespace ares
 {
     template<class T>
     struct _Body;
-    class ExpressionPool;
+    class MemCache;
     class Term;
     class structured_term;
     class Constant;
@@ -21,11 +22,15 @@ namespace ares
     class Literal;
     class Clause;
 
+    /**************************************************/
+    /**
+     * Typedef shared_ptr for the different managed objects.
+     */ 
     typedef _Body<const Term> Body;
     typedef _Body<const Literal> ClauseBody;
 
     typedef std::shared_ptr<const Term>             cnst_term_sptr;
-    typedef std::shared_ptr<const structured_term>  cnst_structured_term_sptr;
+    typedef std::shared_ptr<const structured_term>  cnst_st_term_sptr;
     typedef std::shared_ptr<const Variable>         cnst_var_sptr;
     typedef std::shared_ptr<const Constant>         cnst_const_sptr;
     typedef std::shared_ptr<const Function>         cnst_fn_sptr;
@@ -37,10 +42,11 @@ namespace ares
     typedef std::shared_ptr<Literal>          lit_sptr;
 
     typedef std::weak_ptr<Term>             term_wkptr;
-    typedef std::weak_ptr<structured_term>  structured_term_wkptr;
+    typedef std::weak_ptr<structured_term>  st_term_wkptr;
     typedef std::weak_ptr<Function>         fn_wkptr;
     typedef std::weak_ptr<Literal>          lit_wkptr;
 
+    /**************************************************/
 
     /**
      * Containers of shared_ptrs of terms and literals 
@@ -54,6 +60,8 @@ namespace ares
     typedef u_char arity_t;
     typedef std::unordered_map<arity_t, std::pair<uint,std::vector<void*>>> arity_pool_map;
 
+    /**************************************************/
+
     enum  pool_type 
     {
         sterm_pool_t=0, 
@@ -62,19 +70,28 @@ namespace ares
         container_pool_t
     };
     
+    /**
+     * A pool of structured_terms and clasuses.
+     */
     class MemoryPool
     {
     private:
-        inline void* allocate(std::vector<void *>& pool){
-            void * el = pool.back();
-            pool.pop_back();
-            return el;
-        }
+        //Ctor
+        MemoryPool(std::size_t st_terms,std::size_t clause_s,std::vector<std::pair<arity_t,uint>> arities);
+
+        MemoryPool(const MemoryPool&)=delete;
+        MemoryPool& operator=(const MemoryPool&)=delete;
+        MemoryPool(const MemoryPool&&)=delete;
+        MemoryPool& operator=(const MemoryPool&&)=delete;
 
     public:
-        MemoryPool(std::size_t st_terms,std::size_t clause_s,std::vector<std::pair<arity_t,uint>> arities);
+        inline static MemoryPool& create(std::size_t st_terms,std::size_t clause_s,std::vector<std::pair<arity_t,uint>> arities){
+            static MemoryPool mem(st_terms,clause_s,arities);
+            return mem;
+        }
+        
+        MemCache* getCache(){ return memCache;}
         void init_pools(std::size_t st_terms,std::size_t clause_s,std::vector<std::pair<arity_t,uint>> arities);
-
         /**
          * Initializes the structured_term, Clause, Body pools.
          */
@@ -103,24 +120,7 @@ namespace ares
                 }
             }
         }
-        /**
-         * Register names, and assign unique nums to them.
-         */
-        static inline ushort registerVar(std::string s){
-            static ushort id=0;
-            varNameNum[s] = id;
-            varNumName[id] = s;
-            return id++;
-        }
-
-        static inline ushort registerName(std::string s){
-            static ushort id=0;
-            nameNum[s] = id;
-            numName[id] = s;
-            return id++;
-        }
-        static inline std::string vname(ushort id){ return varNumName.at(id); }
-        static inline std::string name(ushort id){ return numName.at(id); }
+        
         /**
          * @param type could be sterm_pool_t,clause_pool_t and 
          * @returns a structured_term from the free function pool.
@@ -202,20 +202,21 @@ namespace ares
             }
             return -1;
         }
-        ~MemoryPool() {
-            for (std::vector<void*>* v: POOLS)
-                for (void* vp : *v)
-                    free(vp);
-                        
-            for (auto&& it: container_pool)
-                for (void* vp : it.second.second)
-                    free(vp);
-            // delete EMPTY_CONTAINER;
-        }
+        ~MemoryPool();
         const static lit_container* EMPTY_CONTAINER;
-        static ExpressionPool* exprPool;
 
     private:
+        inline void* allocate(std::vector<void *>& pool){
+            void * el = pool.back();
+            pool.pop_back();
+            return el;
+        }
+
+    /**
+     * Data
+     */
+    private:
+        static MemCache* memCache;
         uint pool_element_size[3];
         uint gfactor[3] = {1,1,1};
 
@@ -232,7 +233,7 @@ namespace ares
 
         /**
          * These are basically collections of "shells" that can hold a name and a body*.
-         * The separation b/n term and body is b/c only ExpressionPool is allowed to 
+         * The separation b/n term and body is b/c only MemCache is allowed to 
          * create terms/literals but other user code can still create a PoolKey{name,body}
          * to index the expression pool. That way only one instance of a term exists.
          */
@@ -250,12 +251,19 @@ namespace ares
         arity_pool_map container_pool;  //for body of Literals, Fns and Clauses
 
         std::vector<std::vector<void*>*> POOLS;
+    };
 
-        static std::unordered_map<ushort, std::string> varNumName;
-        static std::unordered_map<std::string, ushort> varNameNum;
-
-        static std::unordered_map<ushort, std::string> numName;
-        static std::unordered_map<std::string, ushort> nameNum;
+    /**
+     * TODO: write an allocator for the pool. This can be used with stl-containers and
+     * shared_ptr.
+     */ 
+    class Allocator
+    {
+    private:
+        /* data */
+    public:
+        Allocator(/* args */) {}
+        ~Allocator() {}
     };
 } // namespace ares
 

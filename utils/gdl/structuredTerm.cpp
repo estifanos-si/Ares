@@ -1,4 +1,4 @@
-#include "utils/memory/expressionPool.hh"
+#include "utils/memory/memCache.hh"
 #include <type_traits>
 #include "ares.hh"
 
@@ -8,9 +8,9 @@
  */
 namespace ares
 {   
-    /**
-     * new and delete for class Function
-     */
+    // /**
+    //  * new and delete for class Function
+    //  */
     void* Function::operator new(std::size_t){
         return Ares::mempool->allocate(sterm_pool_t);
     }
@@ -44,16 +44,16 @@ namespace ares
     const cnst_term_sptr Function::operator()(const Substitution &sub,VarSet& vSet) const {
         Body* body = instantiate<Function>(*this, sub, vSet);
         if( !body ) return null_term_sptr;
-        PoolKey key{name, body,true,nullptr};
-        return Ares::exprpool->getFn(key);
+        PoolKey key{name, body,true};
+        return Ares::memCache->getFn(key);
     }
 
    const cnst_term_sptr Literal::operator()(const Substitution &sub,VarSet& vSet) const {
 
         Body* body = instantiate<Literal>(*this, sub, vSet);
         if( !body ) return null_term_sptr;
-        PoolKey key{name, body,this->positive,nullptr};
-        return Ares::exprpool->getLiteral(key);
+        PoolKey key{name, body,this->positive};
+        return Ares::memCache->getLiteral(key);
     }
 
     template<class T>

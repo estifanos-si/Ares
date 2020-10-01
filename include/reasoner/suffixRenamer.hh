@@ -4,46 +4,46 @@
 #include "reasoner/substitution.hh"
 #include <mutex>
 #include <string.h>
-
+#include <atomic>
 namespace ares
 {
-    class ExpressionPool;
+    class MemCache;
     /**
      * Renames variables by adding a unique suffix to them.
      */
     class SuffixRenamer : public Substitution
     {
     private:
-        static ExpressionPool* pool;
-        ushort suffix = 1;                    //Save it for the current renaming
+        static MemCache* pool;               
+        const ushort suffix;                    
 
     public:
-        SuffixRenamer(){ }
-        SuffixRenamer(const SuffixRenamer& sr):Substitution(){ suffix=sr.suffix;}
-        void setSuffix(uint suff ) { suffix = suff;}
-        ushort getNxtSuffix() { return suffix+1;}
-        static void setPool(ExpressionPool* p) {pool = p;}
+        SuffixRenamer(ushort s):suffix(s+1){}
+        
+        static void setPool(MemCache* p) {pool = p;}
         /**
-         * Protect against accidental copying, pass by value, ...
+         * delete copy/move constructor/assignment.
          */
-        SuffixRenamer(const SuffixRenamer&& s) = delete;
+        SuffixRenamer(const SuffixRenamer&)= delete;
+        SuffixRenamer(const SuffixRenamer&&) = delete;
         SuffixRenamer& operator = (const SuffixRenamer& other) = delete;
         SuffixRenamer& operator = (const SuffixRenamer&& other) = delete;
 
         static Substitution emptySub;
 
-        virtual bool bind(const cnst_var_sptr&,const cnst_term_sptr&){return true;}
-
+        virtual bool bind(const Variable*,const cnst_term_sptr&){return true;}
+        
+        ushort gets() { return suffix;}
         //To get the immediate mapping, without traversing the chain.
-        virtual const cnst_term_sptr get(const cnst_var_sptr&) const ;
+        virtual const cnst_term_sptr get(const Variable*) const ;
         //Overload the indexing operator, to get the underlying exact mapping        
-        virtual const cnst_term_sptr operator[]  (const cnst_var_sptr& x) const{ return get(x);} 
+        virtual const cnst_term_sptr operator[]  (const Variable* x) const{ return get(x);} 
 
         virtual bool isRenaming() const { return true;}
         /**
          * Check if this variable is bound
          */ 
-        virtual bool isBound(const cnst_var_sptr&) const {return true;}
+        virtual bool isBound(const Variable*) const {return true;}
         
         virtual ~SuffixRenamer(){}
     };

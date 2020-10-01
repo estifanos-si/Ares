@@ -1,13 +1,21 @@
 {
-    "parser_threads":1,
+    "strategy":"Montecarlo",
     "prover_threads":4,
-    "gdl":"tests/games/chess.kif",
-    "debug":false,
+    "url":"http://192.168.0.50:8080",
+    "gdl":"tests/ggp.org/games/tic.kif",
+    "debug":true,
     "file":true,
     "random":true,
-    "deletionPeriod":30,
-    "deletionQueueSize":16384,
+    "deletionPeriod":60,
+    "deletionPeriodLit":60,
+    "deletionQueueSize":131072,
     "jobQueue":24,
-    "simulaions":1,
-    "steps":300
+    "simulations":1,
+    "bucket":600,
+    "steps":201,
+    "ansSample":30,
+    "uct_c":60,
+    "delta_sec":500,
+    "port":8080,
+    "stateDumpF":"./visualization/data.json"
 }

@@ -1,5 +1,7 @@
-#include "utils/threading/loadBalancer.hh" 
-#include "utils/threading/threadPool.hh"
+#include "utils/threading/threading.hh"
+#include "reasoner/cache.hh"
+#include "reasoner/prover.hh"
+
 namespace ares
 {
     LoadBalancer::LoadBalancer(ushort nWrks):nWorkers(nWrks),outstanding_work(0){
@@ -40,5 +42,25 @@ namespace ares
         }
         WorkerThread* wth = workerThreads[curr];
         wth->submit(job);
+    }
+
+    ClauseCB::ClauseCB(Query&& query)
+    : CallBack(query.cb->done,query.cache), nxt(query)
+    {
+    }
+    inline void ClauseCB::operator()(const Substitution& ans, ushort suffix, bool isLookup){
+        auto c = std::unique_ptr<Clause>(nxt->clone());
+        c->setSubstitution(nxt->getSubstitution()  + ans);
+        Query q(c , nxt.cb, nxt.context,nxt.cache,suffix+1,nxt.random);
+        q.pool = nxt.pool;
+        if( nxt.pool )
+            q.pool->post(  [=]{prover->compute(q,isLookup);} );
+        else
+            prover->compute(q,isLookup);
+    }
+    inline void LiteralCB::operator()(const Substitution& ans, ushort suffix, bool isLookup){
+        if( cache )//don't want to cache true and does, and negation queries.
+            cache->addAns(lit, ans);
+        (*cb)(ans,suffix,isLookup);
     }
 }

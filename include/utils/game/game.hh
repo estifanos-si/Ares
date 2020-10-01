@@ -5,22 +5,36 @@
 #include <iostream>
 #include "utils/threading/locks.hh"
 #include "utils/utils/hashing.hh"
+#include "utils/memory/namer.hh"
+#include "utils/gdl/clause.hh"
 
 namespace ares
 {
+    class State;
     typedef const Term Move;
     typedef const Term Role;
     typedef cnst_term_sptr move_sptr;
     typedef cnst_term_sptr role_sptr;
     typedef std::vector<move_sptr> Moves;
     typedef std::vector<role_sptr> Roles;
+    typedef Moves Action;
+    typedef std::unique_ptr<Action> uAction;
+    typedef std::unique_ptr<const Action> ucAction;
+    typedef std::unique_ptr<Moves> uMoves;
+
     
     typedef UniqueVector<const Clause*,ClauseHasher,ClauseHasher> UniqueClauseVec;
 
     struct KnowledgeBase
     {
+        KnowledgeBase(){}
+        KnowledgeBase(const KnowledgeBase&)=delete;
+        KnowledgeBase& operator=(const KnowledgeBase&)=delete;
+        KnowledgeBase(const KnowledgeBase&&)=delete;
+        KnowledgeBase& operator=(const KnowledgeBase&&)=delete;
+        
         virtual const UniqueClauseVec* operator [](ushort name)const = 0;
-        virtual void add(ushort name, Clause*) = 0;
+        virtual bool add(ushort name, Clause*) = 0;
         virtual ~KnowledgeBase(){}
         protected:
             SpinLock slock;
@@ -30,9 +44,11 @@ namespace ares
     private:
         /*A mapping from head names --> [clauses with the same head name]*/
         std::unordered_map<ushort, UniqueClauseVec*> rules;
+        Roles roles;
+        State* init_;
 
     public:
-        Game(/* args */){}
+        Game(/* args */):init_(nullptr){}
 
         virtual const UniqueClauseVec* operator [](ushort name) const {
             const UniqueClauseVec* v = nullptr;
@@ -48,12 +64,12 @@ namespace ares
             return v;
         }
         
-        virtual void add(ushort name, Clause* c){
+        virtual bool add(ushort name, Clause* c){
             std::lock_guard<SpinLock> lk(slock);
             if( rules.find(name) == rules.end() )
                 rules[name] = new UniqueClauseVec();
             
-            rules[name]->push_back(c);
+            return rules[name]->push_back(c);
         }
         
         std::unordered_map<ushort, UniqueClauseVec*>::iterator begin(){ return rules.begin();}
@@ -62,15 +78,25 @@ namespace ares
         std::unordered_map<ushort, UniqueClauseVec*> getRules(){
             return rules;
         }
-        
-        virtual ~Game(){
-            for (auto& it : rules)
+        /**
+         * The roles are static wihin a game no need to compute them.
+         */
+        const Roles& getRoles();
+        /**
+         * THe initial state is static within the game no need to compute it.
+         */
+        const State* init();
+
+        std::string toString(){
+            std::string s;
+            for (auto &&[name,vec] : rules)
             {
-                for (const Clause *c : *it.second)
-                        delete c;
-                delete it.second;
+                for (auto &&i : *vec)
+                    s.append( i->to_string() + " ") ;
             }   
+            return s;
         }
+        virtual ~Game();
     };
 } // namespace ares
 

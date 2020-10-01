@@ -18,31 +18,24 @@ namespace ares
     /**
      * TODO: Pre-Compute Ground.
      */
-    enum Type {VAR,CONST,FN,LIT};
-    class ExpressionPool;
-    typedef std::unordered_set<cnst_var_sptr,SpVarHasher,SpVarEqual> VarSet;
+    
+    class MemCache;
+    typedef std::unordered_set<const Variable*,VarHasher,VarEqual> VarSet;
+    typedef std::unordered_map<ushort,ushort> VarRenaming;
 
     //Variables, functions, constants all inherit from this abstract class.
     class Term
     {
-    friend class ExpressionPool;
-    
+    friend class MemCache;
+    public: enum Type {VAR,CONST,FN,LIT};
     protected:
-        ushort name;
-        /*_this is a reference to the shared_ptr in the expression pool.
-          Used to quickly reset/delete it in the expression pool.*/
-        // cnst_term_sptr* _this = nullptr;
-        /**
-         * TODO: pre-computed ground value 
-         */
-        bool ground;    
+        ushort name; 
         Type type;        
 
         Term(ushort n, Type t):name(n),type(t){}
         virtual ~Term(){}
 
     public:
-        static CharpHasher nameHasher;  
         static cnst_term_sptr null_term_sptr;
         static cnst_lit_sptr null_literal_sptr;
         /**
@@ -63,6 +56,7 @@ namespace ares
 
         virtual bool is_ground() const = 0;
         virtual std::size_t hash() const = 0;
+        virtual std::size_t hash(VarRenaming& renaming,ushort& nxt) const = 0;
 
         virtual bool operator==(const Term& t) const{
             //They are equal iff they have the same address.
@@ -70,11 +64,9 @@ namespace ares
             return this == &t;
         };
         virtual bool operator!=(const Term& t) const{
-            //They are equal iff they have the same address.
-            //Only one instance of a term exists.
             return this != &t;
         };
-
+        virtual bool equals(const Term& t,VarRenaming& renaming) const =0;
 
         ushort get_name() const {return name;}
         Type get_type() const {return type;}
@@ -96,17 +88,20 @@ namespace ares
     
     class structured_term : public Term
     {
-    friend class ExpressionPool;
+    friend class MemCache;
     friend class visualizer;
     protected:
         mutable SpinLock slk;
         mutable bool positive;
-        const Body* _body = nullptr;
-        const Body& body;
-
+        const Body* body = nullptr;
+        mutable struct { 
+            std::atomic_bool value; std::atomic_bool valid; 
+            operator bool()const{return value;} 
+        }ground;
+        
     public:
         structured_term(ushort n, bool p,const Body* b,Type t)
-        :Term(n,t),positive(p),_body(b),body(std::ref(*_body))
+        :Term(n,t),positive(p),body(b),ground{false,false}
         {
         }
 
@@ -125,48 +120,77 @@ namespace ares
             return positive;
         }
         virtual cnst_term_sptr& getArg(uint i) const {
-            if( i >= body.size() ) throw IndexOutOfRange("Structured Term GetArg. Size is " +std::to_string(body.size()) + ", index is " + std::to_string(i)) ;
+            if( i >= body->size() ) throw IndexOutOfRange("Structured Term GetArg. Size is " +std::to_string(body->size()) + ", index is " + std::to_string(i)) ;
             
-            return body[i];
+            return (*body)[i];
         }
-        virtual const Body& getBody() const { return body;}
+        virtual const Body& getBody() const { return (*body);}
         
-        virtual uint getArity() const {return body.size();}
-
+        virtual uint getArity() const {return body->size();}
+        /**
+         * Check if this structured term is a variant of term
+         * @param t another term to compare against
+         * @returns true iff t is a variant of this structured term.
+         */
+        virtual bool equals(const Term& t,VarRenaming& renaming) const{
+            if( type != t.get_type() || name != t.get_name() ) return false;
+            auto* st = (structured_term*)&t;
+            for (size_t i = 0; i < body->size(); i++)
+                if ( not (*body)[i]->equals(*(*st->body)[i], renaming ) )
+                    return false;
+            return true;
+        }
         virtual std::size_t hash() const {
             std::size_t nHash = std::hash<ushort>()(name);
-            for (const cnst_term_sptr& t : body)
+            for (const cnst_term_sptr& t : *body)
                 hash_combine(nHash,t.get());
             
             return nHash;
         }
-        virtual bool is_ground() const {
-            for (const cnst_term_sptr& arg : body)
-                if (!arg->is_ground()) return false;
+        /**
+         * This hash function cosiders variants the same.
+         */
+        virtual std::size_t hash(VarRenaming& renaming,ushort& nxt) const {
+            std::size_t nHash = std::hash<ushort>()(name);
 
-            return true;
+            for (const cnst_term_sptr& t : *body)
+                nHash ^= t->hash(renaming,nxt) + 0x9e3779b9 + (nHash<<6) + (nHash>>2);
+
+            return nHash;
+        }
+        virtual bool is_ground() const {
+            if( not ground.valid ){
+                ground.value = true;
+                for (const cnst_term_sptr& arg : *body)
+                    if (!arg->is_ground()) { ground.value = false; break; }
+                
+                ground.valid = true;
+            }
+            return ground;
         }
         virtual std::string to_string() const {
-            std::string s("(");
+            std::string s;
+            if( body->size() ) s.append("(");
             if(not positive) s.append("not ( ");
             s.append(Namer::name(name));
-            for (auto &t : body){
+            for (auto &t : *body){
                 s.append(" " + t->to_string());
             }
             if(not positive) s.append(" )");
-            s.append(")");
+            if( body->size() ) s.append(")");
             return s;
         }
+
         virtual const cnst_term_sptr operator ()(const Substitution &sub,VarSet& vSet) const = 0;
         
         virtual ~structured_term() {}
     };
     
 
-    #define is_var(t)  (t->get_type() == VAR)
-    #define is_const(t)  (t->get_type() == CONST)
-    #define is_fn(t)  (t->get_type() == FN)
-    #define is_lit(t) (t->get_type() == LIT)
+    #define is_var(t)  (t->get_type() == Term::VAR)
+    #define is_const(t)  (t->get_type() == Term::CONST)
+    #define is_fn(t)  (t->get_type() == Term::FN)
+    #define is_lit(t) (t->get_type() == Term::LIT)
     #define is_struct_term(t) ( is_lit(t) || is_fn(t) )
 } // namespace ares
 
