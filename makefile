@@ -171,6 +171,7 @@ simulator: $(OBJS_DIR)/$(TESTS_STRESS)/simulator.o $(VERIFIER_DEP)
 	$(CC) $(FLAGS) $(LIBS) -o $(STRESS_BIN)/simulator $^
 strategy_test:$(OBJS_DIR)/$(TESTS_STRESS)/strategy_test.o $(VERIFIER_DEP)  
 	$(CC) $(FLAGS) $(LIBS) -o $(STRESS_BIN)/strategy_test $^
+
 ## Run the tests
 run_verifier:
 	export LD_LIBRARY_PATH=$(CPPREST_SO)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} && $(UNIT_BIN)/verifier $(game)
@@ -186,6 +187,8 @@ run_answerListTest:
 	$(UNIT_BIN)/answerListTest
 run_cacheTest:
 	$(UNIT_BIN)/cacheTest
+run_monteTest:
+	$(UNIT_BIN)/monteTest
 
 .clean:	
 	find $(OBJS_DIR) -type f -name '*.o' -delete 

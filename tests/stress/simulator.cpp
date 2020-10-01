@@ -65,7 +65,6 @@ int main(int argc, char const *argv[])
             if( ares->terminal(*state) ){
                 auto reward_0 = ares->reward(*r0, state);
                 auto reward_1 = ares->reward(*r1, state);
-                viz.draw(*state);
                 std::cout << "Rewards for " << *r0<< " , " << reward_0 << "\n";
                 std::cout << "Rewards for " << *r1<< " , " << reward_1 << "\n";
                 break;
