@@ -42,7 +42,7 @@ FLAGS+= -ggdb -O3
 endif
 
 
-FLAGS += -fno-strict-aliasing -Wall -std=c++17 -I$(IDIR) -I$(CPPREST_INC)
+FLAGS += -fno-strict-aliasing -Wall -Wextra -std=c++17 -I$(IDIR) -I$(CPPREST_INC)
 LIBS =  -L$(CPPREST_SO) -lboost_regex -lboost_thread -lboost_chrono -lpthread -ltbb  -lboost_system -lcrypto -lssl -lcpprest
 
 
@@ -166,11 +166,11 @@ $(OBJS_DIR)/$(TESTS_UNIT)/mock_reasoner.o: $(TESTS_UNIT)/mock_reasoner.cpp $(INC
 
 #Tests involving Random simulation and verification of the reasoner
 verifier: $(OBJS_DIR)/$(TESTS_UNIT)/verifier.o $(VERIFIER_DEP)
-	$(CC) $(FLAGS) $(LIBS) -o $(UNIT_BIN)/verifier $^
+	$(CC) $(FLAGS) $(LIBS) -o $(UNIT_BIN)/verifier  -Wl,--start-group $^ -Wl,--end-group
 simulator: $(OBJS_DIR)/$(TESTS_STRESS)/simulator.o $(VERIFIER_DEP)
-	$(CC) $(FLAGS) $(LIBS) -o $(STRESS_BIN)/simulator $^
+	$(CC) $(FLAGS) $(LIBS) -o $(STRESS_BIN)/simulator  -Wl,--start-group $^ -Wl,--end-group
 strategy_test:$(OBJS_DIR)/$(TESTS_STRESS)/strategy_test.o $(VERIFIER_DEP)  
-	$(CC) $(FLAGS) $(LIBS) -o $(STRESS_BIN)/strategy_test $^
+	$(CC) $(FLAGS) $(LIBS) -o $(STRESS_BIN)/strategy_test  -Wl,--start-group $^ -Wl,--end-group
 
 ## Run the tests
 run_verifier:
