@@ -25,8 +25,8 @@ to it in a formal description (specifically GDL).
 
 ### Build
 
-(make sure boost is installed. see [Dependencies Section](#boost) )
-(make sure cpprestsdk is setup. see [Dependencies Section](#cpprestsdk) )
+(make sure `boost` is installed. see [Dependencies Section](#boost) ) <br/>
+(make sure `cpprestsdk` is setup. see [Dependencies Section](#cpprestsdk) )
 
 ~~~
 mkdir build && cd build
